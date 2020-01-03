@@ -1,11 +1,12 @@
 from functools import (update_wrapper, wraps)
-from typesafe import typesafe, typesafe_mf
+try:
+    from typesafe import Typesafe, Typesafe_mf
+except ImportError:
+    Typesafe = lambda f: f
 
 import functools
 import typing
 from copy import deepcopy
-
-g_test_cases = []
 
 def _namedtuple(name, *fields):
     class Object(object):
@@ -16,13 +17,21 @@ def _namedtuple(name, *fields):
                 setattr(self, k, v)
 
         def __eq__(self, other):
-            return all(getattr(self, field) == getattr(other, field) for field in self._fields)
+            return self._name == other._name and all(getattr(self, field) == getattr(other, field) for field in self._fields)
 
         def __instancecheck__(cls, obj):
             return cls._fields == obj._fields and cls._name == obj._name
 
         def __subclasscheck__(cls, subclass):
             return cls._fields == subclass._fields and cls._name == subclass._name
+
+        def __repr__(self):
+            return '<Namedtuple {}>'.format(self._name)
+
+        def __str__(self):
+            ffields = ['{}={}'.format(field, getattr(self, field)) for field in self._fields]
+            return '<Namedtuple {} {}>'.format(self._name, ', '.join(ffields))
+
 
     Object._name = name
     Object._fields = fields
@@ -31,14 +40,21 @@ def _namedtuple(name, *fields):
         setattr(Object, f, None)
 
     return Object
-        
+
 _suite_result = _namedtuple('suite_result', 'passed', 'total', 'fails')
-_test_case_data = _namedtuple('test_case_data', 'case_name', 'case_fn')
+_test_case_data = _namedtuple('test_case_data', 'case_name', 'case_details', 'case_fn')
 _test_case_fail_result = _namedtuple('test_case_fail_result', 'case_name', 'fail_reason')
 
-test_result = _namedtuple('test_result', 'passed', 'fail_reason')
-Fail = lambda reason: test_result(passed=False, fail_reason=reason)
-Success = lambda: test_result(passed=True, fail_reason=None)
+TestResult = _namedtuple('TestResult', 'passed', 'fail_reason')
+Fail = lambda reason: TestResult(passed=False, fail_reason=reason)
+Success = lambda: TestResult(passed=True, fail_reason=None)
+
+@Typesafe
+def _print_suite_result(result: _suite_result):
+    print('')
+    for fail_msg in result.fails:
+        print(fail_msg)
+    print('\n{}/{} tests passed'.format(result.passed, result.total))
 
 
 class TestSuite(object):
@@ -57,10 +73,10 @@ class TestSuite(object):
 
         print('\nRunning test suite {}'.format(self.suite_name))
         for tc in self.test_cases:
-            print('  running test case {}...'.format(tc.case_name), end='')
+            print('  running {}...'.format(tc.case_name), end='')
             try:
                 result = tc.case_fn()
-                if result.passed:
+                if result is None or result.passed:
                     tc_passed += 1
                     print(' ok')
                 else:
@@ -70,55 +86,38 @@ class TestSuite(object):
                 fails.append(_test_case_fail_result(case_name = tc.case_name, fail_reason = 'exception thrown: {}'.format(e)))
                 print(' fail')
 
-        return _suite_result(
+        result = _suite_result(
            passed = tc_passed,
            total = tc_total,
-           fails = ('{}.{} failed: {}'.format(self.suite_name, fail.case_name, fail.fail_reason) for fail in fails))
+           fails = ['{}.{} failed: {}'.format(self.suite_name, fail.case_name, fail.fail_reason) for fail in fails])
+        _print_suite_result(result)
+        return result
 
 
-####*- wrapped function must return Fail(reason) or Success() *-####
-class test_case(object):
-    @typesafe_mf
-    def __init__(self, suite: TestSuite, case_name: str):
+class TestCase(object):
+    def __init__(self, suite: TestSuite, case_details: str):
         self.suite = suite
-        self.case_name = case_name
+        self.case_details = case_details
+        self.case_name = ''
 
-    @typesafe_mf
-    def __call__(self, fn: typing.Callable[[], test_result]) -> typing.Callable[[], test_result]:
-        self.suite._register(_test_case_data(case_name = self.case_name, case_fn = fn))
+    def __call__(self, fn: typing.Callable[[], TestResult]) -> typing.Callable[[], TestResult]:
+        self.case_name = fn.__name__
+        self.suite._register(_test_case_data(case_name = self.case_name, case_details = self.case_details, case_fn = fn))
         return fn
 
 
-def run_suites(suites):
-    results = [suite.run_tests() for suite in suites]
-    grand_passed = sum(result.passed for result in results)
-    grand_total = sum(result.total for result in results)
+def assert_equal(lhs, rhs):
+    if lhs != rhs:
+        raise AssertionError('"{}" is not equal to "{}"'.format(lhs, rhs))
+    return True
 
-    print('')
-    for result in results:
-        for fail in result.fails:
-            print(fail)
-
-    print('\n{}/{} tests passed'.format(grand_passed, grand_total))
-
-
-""" In-place sanity check and example usage """
-
-testTests = TestSuite('test suite')
-
-@typesafe
-@test_case(testTests, 't1')
-def tc1() -> test_result:
-    return Success()
-
-@typesafe
-@test_case(testTests, 't2')
-def tc2() -> test_result:
-    return Fail('some reason')
-
-@typesafe
-@test_case(testTests, 't3')
-def tc3() -> test_result:
-    raise RuntimeError('some other reason')
-
-run_suites([testTests])
+def assert_throws(fn, expected_exception):
+    try:
+        fn()
+        raise AssertionError('function did not raise an exception')
+    except Exception as e:
+        if not isinstance(e, type(expected_exception)):
+            raise AssertionError('exception "{}" is not an instance of "{}"'.format(e, type(expected_exception)))
+        if str(expected_exception) and not str(e) == str(expected_exception):
+            raise AssertionError('exception message "{}" does not match expected "{}"'.format(str(e), str(expected_exception)))
+    return True
