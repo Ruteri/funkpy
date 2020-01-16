@@ -44,7 +44,7 @@ class Middleman_mf(Middleman):
     Basic usage:
     class SomeClass(object):
         @Middleman_mf(pre_hook=lambda obj, *args, **kwargs: None,
-                      post_hook: lambda obj, rv, *args, **kwargs: None)
+                      post_hook=lambda obj, rv, *args, **kwargs: None)
         def some_member_function(self, some_args):
             return None
     """
@@ -72,7 +72,7 @@ class Middleman_cl(object):
 
     Basic usage:
     @Middleman_cl(pre_hook=lambda obj, mf, *args, **kwargs: None,
-                  post_hook: lambda obj, mf, rv, *args, **kwargs: None)
+                  post_hook=lambda obj, mf, rv, *args, **kwargs: None)
     class SomeClass(object):
         def some_fn(self, arg1, arg2): pass
     """
