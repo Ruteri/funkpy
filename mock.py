@@ -1,5 +1,11 @@
 import re
 
+"""Yet another mocking library.
+
+This file is a result of frustration over lack of functionality in various mocking frameworks.
+Conforms (mostly) to SinonJS mocking API https://sinonjs.org/.
+"""
+
 # Various helpers
 def _raise(ex):
     raise ex
