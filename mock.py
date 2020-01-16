@@ -369,14 +369,14 @@ class MockTests(unittest.TestCase):
 class MockBasicUsageTests(unittest.TestCase):
     def test_basic_usage(self):
         db_mock = Mock()
-        sql_exec_fn = db_mock.expects('exec_sql', lambda s: None)
+        sql_exec_fn = db_mock.expects('exec_sql')
         sql_exec_fn.on(Like('select \* from table where id=5')).returns('some columns')
         sql_exec_fn.on(Like('select \* from table where id=6')).raises(ValueError('some message'))
         sql_exec_fn.on(Like('select \* from table where id=[0-9]')).returns('some more columns')
 
-        self.assertEquals(db_mock.exec_sql('select * from table where id=5'), 'some columns')
-        self.assertEquals(db_mock.exec_sql('select * from table where id=1'), 'some more columns')
-        self.assertEquals(db_mock.exec_sql('select * from table where id=7'), 'some more columns')
+        self.assertEqual(db_mock.exec_sql('select * from table where id=5'), 'some columns')
+        self.assertEqual(db_mock.exec_sql('select * from table where id=1'), 'some more columns')
+        self.assertEqual(db_mock.exec_sql('select * from table where id=7'), 'some more columns')
 
         with self.assertRaises(ValueError):
             db_mock.exec_sql('select * from table where id=6')
