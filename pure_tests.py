@@ -111,11 +111,21 @@ class PureTests(unittest.TestCase):
                 with testobj.assertRaises(AttributeError):
                     obj.d = 10
 
+            field = TO()
+
+            @pure_mf
+            def field_access(self):
+                return self.field
+
         cm = ConstMembers()
         cm.access_fn(to)
         cm.perm_fn(to)
         cm.perm_self()
 
+        obj_field = cm.field_access()
+        self.assertEqual(obj_field.d, 5)
+        with testobj.assertRaises(AttributeError):
+            obj_field.d = 15
 
 if __name__ == '__main__':
     unittest.main()

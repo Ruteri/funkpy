@@ -59,7 +59,7 @@ class _const_wrapper(object):
         try:
             # If it fails, robj is immutable, and we check assignment in parent,
             # so we can just return unwrapped robj
-            robj.__setattr__('_is_const_wrapped', True)
+            setattr(robj, '_is_const_wrapped', True)
             return _const_wrapper(robj)
         except AttributeError:
             return robj
