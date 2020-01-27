@@ -3,6 +3,20 @@ import time
 
 # TODO: add call graph of monitored functions
 
+from collections import namedtuple
+
+class CallTrace(object):
+    """Helper structure keeping track of callers and call times
+    Attributes:
+        self_time: elapsed time not counting subcalls
+        total_time: total elapsed time (including subcalls and excluded)
+        caller: placeholder for call site
+    """
+    def __init__(self, caller):
+        self.self_time = -time.time()
+        self.total_time = self.self_time
+        self.caller = caller
+
 class CallProfile(object):
     """Function profile.
 
@@ -47,16 +61,20 @@ class CallProfile(object):
         return wrapper
 
     def on_start(self):
-        self.call_stack.append(-time.time())
+        ct = CallTrace(caller=None)
+        self.call_stack.append(ct)
 
     def on_done(self):
-        self.calls.append(time.time() + self.call_stack.pop())
+        call = self.call_stack.pop()
+        call.self_time += time.time()
+        call.total_time += time.time()
+        self.calls.append(call)
 
     def _pause(self):
-        self.call_stack[-1] += time.time()
+        self.call_stack[-1].self_time += time.time()
 
     def _unpause(self):
-        self.call_stack[-1] -= time.time()
+        self.call_stack[-1].self_time -= time.time()
 
     def _subcall(self, fn, *args, **kwargs):
         self._pause()
@@ -70,16 +88,55 @@ class CallProfile(object):
         self._unpause()
         return rv
 
-    def report(self):
-        print('function {} called {} time(s)'.format(self.fn, len(self.calls)))
-        print('  avg. self time {}'.format(sum(self.calls)/len(self.calls)))
-        for subcall_fn, subcall_calls in self.subcalls.items():
-            print('  subcall {} ran {} time(s), took avg {}'.format(subcall_fn, len(subcall_calls), sum(subcall_calls)/len(subcall_calls)))
+
+_WRAPPER_EXCLUDED_METHODS = [
+    '__class__', '__dir__', '__doc__', '__init__', '__new__',
+    '__weakref__', '__getattr__', '__getattribute__', '__setattr__',
+    '__delattr__', '__dict__', '__str__', '__repr__', '__subclasshook__',
+    '__sizeof__', '__reduce__', '__reduce_ex__', '__hash__', '__format__',
+]
 
 
-class ClassProfile(object):
-    def __init__(self, cl):
-        functools.update_wrapper(self, cl)
+def wrapClassProfile(cl):
+    class ClassProfile(cl):
+        # Not mt-safe
+
+        _n_objects = 0
+        _member_profiles = {}
+
+        def __init__(self, *args, **kwargs):
+            ClassProfile._n_objects += 1
+            return cl.__init__(self, *args, **kwargs)
+    
+    functools.update_wrapper(ClassProfile.__init__, cl.__init__)
+
+    for attr in dir(cl):
+        if attr in _WRAPPER_EXCLUDED_METHODS: continue
+
+        fn = getattr(cl, attr)
+        if not callable(fn): continue
+
+        ClassProfile._member_profiles[attr] = CallProfile(fn)
+
+        try:
+            fn.profile = ClassProfile._member_profiles[attr]
+        except:
+            # wrappers
+            pass
+
+        def wrapper(*args, fn=fn, profile=ClassProfile._member_profiles[attr], **kwargs):
+            profile.on_start()
+            rv = fn(*args, **kwargs)
+            profile.on_done()
+            return rv
+
+        wrapper.profile = ClassProfile._member_profiles[attr]
+
+        functools.update_wrapper(wrapper, fn)
+        setattr(ClassProfile, attr, wrapper)
+
+    return ClassProfile
+        
 
 
 _monitored_calls = []
@@ -115,7 +172,8 @@ class Profiler(object):
 
     @staticmethod
     def profile_class(cl):
-        profile = ClassProfile(cl)
+        profile = wrapClassProfile(cl)
+        functools.update_wrapper(profile, cl, assigned=('__module__', '__name__', '__qualname__', '__doc__', '__annotations__'), updated=())
         _monitored_classes.append(profile)
         return profile
 
@@ -127,7 +185,30 @@ class Profiler(object):
             Profiler.report()
         """
         for call in _monitored_calls:
-            call.report()
+            # called ... times from ...
+            # total ... avg ...
+            self_time = sum([ct.self_time for ct in call.calls])
+            total_time = sum([ct.total_time for ct in call.calls])
+            print('function {}'.format(call.fn))
+            print('  called {} time(s)'.format(len(call.calls)))
+            print('  avg. total time {} second(s)'.format(total_time/len(call.calls)))
+            print('  avg. self time {} second(s)'.format(self_time/len(call.calls)))
+            for subcall_fn, subcall_calls in call.subcalls.items():
+                print('  subcall {} ran {} time(s), took avg {}'.format(subcall_fn, len(subcall_calls), sum(subcall_calls)/len(subcall_calls)))
+
+        for cl in _monitored_classes:
+            total_time = 0
+            print('class {} created {} time(s)'.format(cl, cl._n_objects))
+            for mf_name, mf_profile in cl._member_profiles.items():
+                if not mf_profile.calls: continue # ignore if not called
+                mf_self_time = sum([call.self_time for call in mf_profile.calls])
+                mf_total_time = sum([call.total_time for call in mf_profile.calls])
+                total_time += mf_total_time
+                print('  member {}'.format(mf_name))
+                print('     called {} time(s)'.format(len(mf_profile.calls)))
+                print('     avg. self time {} second(s)'.format(mf_self_time/len(mf_profile.calls)))
+                print('     avg. total time {} second(s)'.format(mf_total_time/len(mf_profile.calls)))
+            print('  spent a total of {} second(s) inside the class'.format(total_time))
 
 
 @Profiler.profile
@@ -154,6 +235,22 @@ for _ in range(2):
     run_f()
     c.mf()
     sort_items([random.randint(0, 1000) for _ in range(10000)])
+
+@Profiler.profile_class
+class D:
+    def __init__(self, somearg):
+        self.somearg = somearg
+
+    def get_member_fn(self):
+        """docstr"""
+        return self.somearg
+
+    def other_mf(self):
+        pass
+
+d = D(10)
+d.get_member_fn()
+d.other_mf()
 
 
 Profiler.report()
