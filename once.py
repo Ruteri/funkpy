@@ -46,3 +46,31 @@ def Cached(fn):
 
     functools.update_wrapper(wrapper, fn)
     return wrapper
+
+
+import unittest
+
+class OnceTests(unittest.TestCase):
+    def test_once(self):
+        @Once
+        def f(arg): return arg
+        self.assertEqual(f(5), 5)
+        with self.assertRaises(RuntimeError):
+            f(10)
+
+class CachedTests(unittest.TestCase):
+    def test_cached(self):
+        self.n_calls = 0
+
+        @Cached
+        def f():
+            self.n_calls += 1
+            return self.n_calls
+
+        self.assertEqual(f(), 1)
+        self.assertEqual(self.n_calls, 1)
+        self.assertEqual(f(), 1)
+        self.assertEqual(self.n_calls, 1)
+
+if __name__ == '__main__':
+    unittest.main()
