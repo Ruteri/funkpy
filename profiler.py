@@ -3,10 +3,10 @@ import time
 
 # TODO: add call graph of monitored functions
 
-class Call(object):
-    """Function call performance monitor.
+class CallProfile(object):
+    """Function profile.
 
-    Usage only through Profiler class.
+    Profile is injected into function dict as `profile`.
     """
     # TODO: also keep track of total time in function
     # TODO: (maybe) monitor stack
@@ -16,6 +16,35 @@ class Call(object):
         self.call_stack = [] # time deltas
         self.calls = []
         self.subcalls = {}
+
+    def exclude(self, fn):
+        """Exclude subcall from function metrics.
+
+        Useful for calls that are present in test env (prints, logs, waits).
+
+        Usage:
+            func.profile.exclude(print)('something that will take a long time to do')
+        """
+        def wrapper(*args, **kwargs):
+            self._pause()
+            rv = fn(*args, **kwargs)
+            self._unpause()
+            return rv
+        functools.update_wrapper(wrapper, fn)
+        return wrapper
+
+    def subcall(self, fn):
+        """Measure call within a function.
+
+        Useful for keeping track of function self-time and external calls.
+
+        Usage:
+            func.profile.subcall(other_internal_fn)()
+        """
+        def wrapper(*args, **kwargs):
+            return self._subcall(fn, *args, **kwargs)
+        functools.update_wrapper(wrapper, fn)
+        return wrapper
 
     def on_start(self):
         self.call_stack.append(-time.time())
@@ -48,7 +77,13 @@ class Call(object):
             print('  subcall {} ran {} time(s), took avg {}'.format(subcall_fn, len(subcall_calls), sum(subcall_calls)/len(subcall_calls)))
 
 
+class ClassProfile(object):
+    def __init__(self, cl):
+        functools.update_wrapper(self, cl)
+
+
 _monitored_calls = []
+_monitored_classes = []
 
 class Profiler(object):
     """Profiler facade class.
@@ -57,15 +92,9 @@ class Profiler(object):
     Usage:
         @Profiler.profile
         def profiled_function():
-            profiled_function.profiler.exclude(time.sleep)(0.01)
-            profiled_function.profiler.subcall(time.sleep)(0.1)
-
-        # ...
+            pass
         Profiler.report()
     """
-    # TODO: monitor object creation/deletion too
-    def __init__(self, call):
-        self.call = call
 
     @staticmethod
     def profile(fn):
@@ -73,16 +102,22 @@ class Profiler(object):
 
         Profiler then keeps track of various stats about the wrapped function.
         """
-        call = Call(fn)
-        _monitored_calls.append(call)
+        profile = CallProfile(fn)
+        _monitored_calls.append(profile)
         def wrapper(*args, **kwargs):
-            call.on_start()
+            profile.on_start()
             rv = fn(*args, **kwargs)
-            call.on_done()
+            profile.on_done()
             return rv
         functools.update_wrapper(wrapper, fn)
-        wrapper.profiler = Profiler(call)
+        wrapper.profile = profile
         return wrapper
+
+    @staticmethod
+    def profile_class(cl):
+        profile = ClassProfile(cl)
+        _monitored_classes.append(profile)
+        return profile
 
     @staticmethod
     def report():
@@ -94,56 +129,28 @@ class Profiler(object):
         for call in _monitored_calls:
             call.report()
 
-    def exclude(self, fn):
-        """Exclude subcall from function metrics.
-
-        Useful for calls that are present in test env (prints, logs, waits).
-
-        Usage:
-            func.profiler.exclude(print)('something that will take a long time to do')
-        """
-        def wrapper(*args, **kwargs):
-            self.call._pause()
-            rv = fn(*args, **kwargs)
-            self.call._unpause()
-            return rv
-        functools.update_wrapper(wrapper, fn)
-        return wrapper
-
-    def subcall(self, fn):
-        """Mark a subcall.
-
-        Useful for keeping track of function self-time and external calls.
-
-        Usage:
-            func.profiler.subcall(other_internal_fn)()
-        """
-        def wrapper(*args, **kwargs):
-            return self.call._subcall(fn, *args, **kwargs)
-        functools.update_wrapper(wrapper, fn)
-        return wrapper
-
 
 @Profiler.profile
 def run_f():
-    run_f.profiler.exclude(time.sleep)(0.01)
-    run_f.profiler.subcall(time.sleep)(0.1)
+    run_f.profile.exclude(time.sleep)(0.01)
+    run_f.profile.subcall(time.sleep)(0.1)
     time.sleep(0.1)
     return 5
 
 @Profiler.profile
 def sort_items(items):
-    sort_items.profiler.subcall(items.sort)()
+    sort_items.profile.subcall(items.sort)()
 
 class C:
     @Profiler.profile
     def mf(self):
         time.sleep(0.1)
+        run_f()
 
 c = C()
 
 import random
-for _ in range(10):
+for _ in range(2):
     run_f()
     c.mf()
     sort_items([random.randint(0, 1000) for _ in range(10000)])
