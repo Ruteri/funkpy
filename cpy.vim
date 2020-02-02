@@ -2,6 +2,15 @@ set shortmess+=W
 vmap <silent> <F5> :call Py3c()<CR>
 
 python3 << EOF
+_g_round = 0
+_g_routs = []
+def _on_rout(_round, lineno, *out):
+	# TODO: keep last N (5?) rounds
+	if _round != _g_round:
+		return
+	_g_routs[lineno].process_outp(*out)
+
+
 class LineOutput(object):
 	def __init__(self, lineno, line):
 		self.lineno = lineno
@@ -37,15 +46,15 @@ def _parse_expr(tokenizer):
 		eq_sign_index = eq_sign_endings.index('=')
 		wrapped_stmt = []
 		wrapped_stmt.append(line)
-		wrapped_stmt.append(indent + '_g_routs[{}].process_outp({})'.format(lineno, ' '.join(kwords[:eq_sign_index])))
+		wrapped_stmt.append(indent + '_on_rout({}, {}, {})'.format(_g_round, lineno, ' '.join(kwords[:eq_sign_index])))
 		return wrapped_stmt
 	elif'(' in line and ')' in line:
 		# Case 2: call without capturing return value
 		opening_par_index = line.find('(')
 		closing_par_index = line.rfind(')')
 		wrapped_stmt = []
-		wrapped_stmt.append(indent + '_exec_out = ' + ' '.join(kwords))
-		wrapped_stmt.append(indent + '_g_routs[{}].process_outp(_exec_out)'.format(lineno))
+		wrapped_stmt.append(indent + '_exec_rv = ' + ' '.join(kwords))
+		wrapped_stmt.append(indent + '_on_rout({}, {}, {})'.format(_g_round, lineno, '_exec_rv'))
 		return wrapped_stmt
 
 	print('expr not recognized: {}'.format(line.strip()))
@@ -68,14 +77,14 @@ def _parse_simple_stmt(tokenizer):
 	if kwords[0] in ['return', 'yield']:
 		wrapped_stmt = []
 		wrapped_stmt.append(indent + '_exec_rv = ' + ' '.join(kwords[1:]))
-		wrapped_stmt.append(indent + '_g_routs[{}].process_outp(_exec_rv)'.format(lineno))
+		wrapped_stmt.append(indent + '_on_rout({}, {}, {})'.format(_g_round, lineno, '_exec_rv'))
 		wrapped_stmt.append(indent + kwords[0] + ' _exec_rv')
 		return wrapped_stmt
 
 	if kwords[0].startswith('assert'):
 		wrapped_stmt = []
 		wrapped_stmt.append(indent + '_exec_rv = ' + ' '.join(kwords[1:]))
-		wrapped_stmt.append(indent + '_g_routs[{}].process_outp(_exec_rv)'.format(lineno))
+		wrapped_stmt.append(indent + '_on_rout({}, {}, {})'.format(_g_round, lineno, '_exec_rv'))
 		wrapped_stmt.append(indent + kwords[0] + ' _exec_rv')
 		return [wrapped_stmt]
 
@@ -230,10 +239,11 @@ lines[-1] = lines[-1][:col2+1]
 
 ebuf = get_buf(vim.current.buffer)
 
+# TODO: save previous rounds?
+_g_round +=1
 _g_routs = []
 t = Tokenizer('\n'.join(lines))
 exec_cmd = '\n'.join(t.parse())
-
 
 output_buf = ['Running:']
 # debug output (actual command ran)
